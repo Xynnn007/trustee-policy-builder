@@ -57,6 +57,11 @@
     return { claim: claim, score: score, device: device, conditions: conditions };
   }
 
+  function all(head, rest) {
+    if (rest && rest.length) head.also = rest;
+    return [head];
+  }
+
   root.AS_PRESETS = [
     {
       id: "blank",
@@ -90,20 +95,22 @@
       devices: ["tdx"],
       defaults: { hardware: 97, executables: 33, configuration: 36 },
       rules: [
-        rule("hardware", 2, "tdx", [
+        rule("hardware", 2, "tdx", all(
           compare("quote.header.tee_type", "==", "81000000", "string"),
-          compare("tcb_status", "==", "UpToDate", "string"),
-          compare("collateral_expiration_status", "==", "0", "string"),
-          reference("quote.body.mr_td", "in", "mr_td"),
-        ]),
-        rule("executables", 3, "tdx", [
+          [
+            compare("tcb_status", "==", "UpToDate", "string"),
+            compare("collateral_expiration_status", "==", "0", "string"),
+            reference("quote.body.mr_td", "in", "mr_td"),
+          ],
+        )),
+        rule("executables", 3, "tdx", all(
           reference("quote.body.rtmr_1", "in", "rtmr_1"),
-          reference("quote.body.rtmr_2", "in", "rtmr_2"),
-        ]),
-        rule("configuration", 2, "tdx", [
+          [reference("quote.body.rtmr_2", "in", "rtmr_2")],
+        )),
+        rule("configuration", 2, "tdx", all(
           compare("td_attributes.debug", "==", "false", "bool"),
-          reference("quote.body.xfam", "in", "xfam"),
-        ]),
+          [reference("quote.body.xfam", "in", "xfam")],
+        )),
       ],
     },
     {
@@ -115,32 +122,36 @@
       devices: ["nvidia-gpu"],
       defaults: { hardware: 97, configuration: 36 },
       rules: [
-        rule("hardware", 2, "nvidia-gpu", [
+        rule("hardware", 2, "nvidia-gpu", all(
           truthy("x-nvidia-gpu-attestation-report-parsed"),
-          truthy("x-nvidia-gpu-attestation-report-signature-verified"),
-          truthy("x-nvidia-gpu-arch-check"),
-          compare(
-            '["x-nvidia-gpu-attestation-report-cert-chain"]["x-nvidia-cert-ocsp-status"]',
-            "==",
-            "good",
-            "string",
-          ),
-          compare(
-            '["x-nvidia-gpu-attestation-report-cert-chain"]["x-nvidia-cert-status"]',
-            "==",
-            "valid",
-            "string",
-          ),
-        ]),
-        rule("configuration", 2, "nvidia-gpu", [
+          [
+            truthy("x-nvidia-gpu-attestation-report-signature-verified"),
+            truthy("x-nvidia-gpu-arch-check"),
+            compare(
+              '["x-nvidia-gpu-attestation-report-cert-chain"]["x-nvidia-cert-ocsp-status"]',
+              "==",
+              "good",
+              "string",
+            ),
+            compare(
+              '["x-nvidia-gpu-attestation-report-cert-chain"]["x-nvidia-cert-status"]',
+              "==",
+              "valid",
+              "string",
+            ),
+          ],
+        )),
+        rule("configuration", 2, "nvidia-gpu", all(
           truthy("secboot"),
-          compare("dbgstat", "==", "disabled", "string"),
-          reference("x-nvidia-gpu-vbios-version", "in", "allowed_vbios_versions"),
-        ]),
-        rule("configuration", 3, "nvidia-gpu", [
+          [
+            compare("dbgstat", "==", "disabled", "string"),
+            reference("x-nvidia-gpu-vbios-version", "in", "allowed_vbios_versions"),
+          ],
+        )),
+        rule("configuration", 3, "nvidia-gpu", all(
           truthy("secboot"),
-          compare("dbgstat", "==", "disabled", "string"),
-        ]),
+          [compare("dbgstat", "==", "disabled", "string")],
+        )),
       ],
     },
     {

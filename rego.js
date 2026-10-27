@@ -58,12 +58,23 @@
         if (i >= text.length) return null;
       }
       if (text[i] === "[") {
-        const match = /^\[\"((?:\\.|[^\"\\])*)\"\]/.exec(text.slice(i));
-        if (!match) return null;
-        const segment = match[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
-        if (!segment) return null;
-        segments.push(segment);
-        i += match[0].length;
+        if (text.slice(i, i + 3) === "[_]") {
+          segments.push({ wild: true });
+          i += 3;
+        } else {
+          const indexMatch = /^\[(0|[1-9]\d*)\]/.exec(text.slice(i));
+          if (indexMatch) {
+            segments.push({ index: Number(indexMatch[1]) });
+            i += indexMatch[0].length;
+          } else {
+            const match = /^\[\"((?:\\.|[^\"\\])*)\"\]/.exec(text.slice(i));
+            if (!match) return null;
+            const segment = match[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+            if (!segment) return null;
+            segments.push(segment);
+            i += match[0].length;
+          }
+        }
       } else {
         const match = /^[A-Za-z0-9_-]+/.exec(text.slice(i));
         if (!match) return null;
@@ -73,12 +84,14 @@
       if (i < text.length && text[i] !== "." && text[i] !== "[") return null;
     }
     if (!segments.length) return null;
-    if (!/^[A-Za-z_]/.test(segments[0])) return null;
+    if (typeof segments[0] !== "string" || !/^[A-Za-z_]/.test(segments[0])) return null;
     return segments;
   }
 
   function appendPath(base, segments) {
     return segments.reduce(function (expr, segment) {
+      if (segment && segment.wild) return expr + "[_]";
+      if (segment && typeof segment.index === "number") return expr + "[" + segment.index + "]";
       if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(segment)) return expr + "." + segment;
       return expr + "[" + regoString(segment) + "]";
     }, base);
@@ -140,7 +153,67 @@
       });
   }
 
-  function conditionLine(device, condition) {
+  function expandClauses(condition) {
+    return [condition].concat(condition.also || []);
+  }
+
+  function fieldByPath(device, source, path) {
+    const list = source === "shared" ? catalog().sharedFields : device && device.fields;
+    if (!list) return null;
+    return list.find(function (field) {
+      return field.path === path;
+    }) || null;
+  }
+
+  function compareLeaf(left, nest) {
+    if ((nest.rhs || "literal") === "reference") {
+      const right = referenceToken(nest.refId);
+      if (!right) return { error: "invalid reference key" };
+      return { line: left + " in " + right };
+    }
+    if (nest.literalType === "bool" && Array.isArray(nest.choices) && nest.choices.length) {
+      const picked = ["true", "false"].filter(function (value) {
+        return nest.choices.indexOf(value) !== -1;
+      });
+      if (picked.length !== 1) return { error: "pick either true or false" };
+      return { line: left + " == " + picked[0] };
+    }
+    if (String(nest.literal == null ? "" : nest.literal).trim() === "") {
+      return { error: "pick a value" };
+    }
+    const right = literalToken(nest.literalType || "string", nest.literal);
+    if (right == null) return { error: "value does not match the field type" };
+    return { line: left + " == " + right };
+  }
+
+  function nestedLines(device, condition, index) {
+    const field = fieldByPath(device, condition.source, condition.path);
+    if (!field || !field.nested) return { error: "field does not take nested JSON" };
+    const base = parsePath(condition.path);
+    if (!base) return { error: "invalid field" };
+    const nests = Array.isArray(condition.nests) ? condition.nests : [];
+    const root = fieldExpr(device, condition.source, base);
+    if (!nests.length) return { lines: [root] };
+    const lines = [];
+    let expr = root;
+    if (field.type === "list") {
+      expr = "ev" + String(index == null ? 0 : index);
+      lines.push(expr + " := " + root + "[_]");
+    }
+    for (let i = 0; i < nests.length; i++) {
+      const nest = nests[i] || {};
+      const text = String(nest.path || "").trim();
+      if (!text) return { error: "enter a JSON field path" };
+      const segments = parsePath(text);
+      if (!segments) return { error: text + " is not a valid JSON field" };
+      const rendered = compareLeaf(appendPath(expr, segments), nest);
+      if (rendered.error) return { error: text + ": " + rendered.error };
+      lines.push(rendered.line);
+    }
+    return { lines: lines };
+  }
+
+  function conditionLine(device, condition, index) {
     if (condition.kind === "custom") {
       const lines = String(condition.text || "")
         .split(/\r?\n/)
@@ -158,6 +231,8 @@
       }
       return { lines: lines };
     }
+
+    if (condition.pathMode === "nested") return nestedLines(device, condition, index);
 
     const segments = parsePath(condition.path);
     if (!segments) return { error: "invalid field" };
@@ -191,7 +266,22 @@
     }
 
     if (op === "contains") return { lines: [right + " in " + left] };
-    return { lines: [left + " " + op + " " + right] };
+    const line = left + " " + op + " " + right;
+    const field = fieldByPath(device, condition.source, condition.path);
+    const values = op === "in" ? splitList(condition.literal) : [String(condition.literal).trim()];
+    return noted(field, values, line);
+  }
+
+  function noted(field, values, line) {
+    const labels = field && field.labels;
+    if (!labels) return { lines: [line] };
+    const notes = values
+      .map(function (value) {
+        return labels[value] ? labels[value] + " (" + value + ")" : "";
+      })
+      .filter(Boolean);
+    if (!notes.length) return { lines: [line] };
+    return { lines: ["# " + notes.join(", "), line] };
   }
 
   function ruleIssues(policy, rule) {
@@ -212,19 +302,24 @@
       }
     }
     if (device && claim) {
+      let seq = 0;
       (rule.conditions || []).forEach(function (condition, index) {
-        if (condition.kind !== "custom" && condition.pathMode !== "custom" && condition.path) {
-          const list = condition.source === "shared" ? catalog().sharedFields : device.fields;
-          const known = list.some(function (field) {
-            return field.path === condition.path;
-          });
-          if (!known) {
-            issues.push("field " + (index + 1) + " is not in the catalog: " + condition.path);
-            return;
+        expandClauses(condition).forEach(function (clause) {
+          const slot = seq;
+          seq += 1;
+          if (clause.kind !== "custom" && clause.pathMode !== "custom" && clause.path) {
+            const list = clause.source === "shared" ? catalog().sharedFields : device.fields;
+            const known = list.some(function (field) {
+              return field.path === clause.path;
+            });
+            if (!known) {
+              issues.push("field " + (index + 1) + ": " + clause.path + " is not in the catalog");
+              return;
+            }
           }
-        }
-        const rendered = conditionLine(device, condition);
-        if (rendered.error) issues.push("field " + (index + 1) + ": " + rendered.error);
+          const rendered = conditionLine(device, clause, slot);
+          if (rendered.error) issues.push("field " + (index + 1) + ": " + rendered.error);
+        });
       });
     }
     return issues;
@@ -297,20 +392,36 @@
       lines.push("default " + claim.variable + " := " + score);
       lines.push("");
       const rules = byClaim.get(claim.id);
-      rules.forEach(function (rule, index) {
+      let started = false;
+      let lastScore = null;
+      rules.forEach(function (rule) {
         const device = deviceById(rule.device);
-        const body = ["\t# " + device.id, "\t" + inputPrefix(device)];
-        (rule.conditions || []).forEach(function (condition) {
-          conditionLine(device, condition).lines.forEach(function (line) {
-            body.push("\t" + line);
-          });
+        const groups = rule.conditions && rule.conditions.length ? rule.conditions : [null];
+        groups.forEach(function (condition) {
+          const body = ["\t# " + device.id, "\t" + inputPrefix(device)];
+          if (condition) {
+            let seq = 0;
+            expandClauses(condition).forEach(function (clause) {
+              conditionLine(device, clause, seq).lines.forEach(function (line) {
+                body.push("\t" + line);
+              });
+              seq += 1;
+            });
+          }
+          const score = Number(rule.score);
+          if (!started) {
+            lines.push(claim.variable + " := " + score + " if {");
+            started = true;
+          } else if (score === lastScore) {
+            lines.push("}");
+            lines.push("");
+            lines.push(claim.variable + " := " + score + " if {");
+          } else {
+            lines.push("} else := " + score + " if {");
+          }
+          lastScore = score;
+          lines.push(body.join("\n"));
         });
-        if (index === 0) {
-          lines.push(claim.variable + " := " + Number(rule.score) + " if {");
-        } else {
-          lines.push("} else := " + Number(rule.score) + " if {");
-        }
-        lines.push(body.join("\n"));
       });
       lines.push("}");
       lines.push("");

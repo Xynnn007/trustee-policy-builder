@@ -14,6 +14,71 @@
     return Object.assign({ path: path, type: type, desc: desc, group: group }, extra || {});
   }
 
+  const UEFI_EVENT_TYPES = [
+    "EV_PREBOOT_CERT",
+    "EV_POST_CODE",
+    "EV_UNUSED",
+    "EV_NO_ACTION",
+    "EV_SEPARATOR",
+    "EV_ACTION",
+    "EV_EVENT_TAG",
+    "EV_S_CRTM_CONTENTS",
+    "EV_S_CRTM_VERSION",
+    "EV_CPU_MICROCODE",
+    "EV_PLATFORM_CONFIG_FLAGS",
+    "EV_TABLE_OF_DEVICES",
+    "EV_COMPACT_HASH",
+    "EV_IPL",
+    "EV_IPL_PARTITION_DATA",
+    "EV_NONHOST_CODE",
+    "EV_NONHOST_CONFIG",
+    "EV_NONHOST_INFO",
+    "EV_OMIT_BOOT_DEVICE_EVENTS",
+    "EV_EFI_EVENT_BASE",
+    "EV_EFI_VARIABLE_DRIVER_CONFIG",
+    "EV_EFI_VARIABLE_BOOT",
+    "EV_EFI_BOOT_SERVICES_APPLICATION",
+    "EV_EFI_BOOT_SERVICES_DRIVER",
+    "EV_EFI_RUNTIME_SERVICES_DRIVER",
+    "EV_EFI_GPT_EVENT",
+    "EV_EFI_ACTION",
+    "EV_EFI_PLATFORM_FIRMWARE_BLOB",
+    "EV_EFI_HANDOFF_TABLES",
+    "EV_EFI_PLATFORM_FIRMWARE_BLOB2",
+    "EV_EFI_HANDOFF_TABLES2",
+    "EV_EFI_VARIABLE_BOOT2",
+    "EV_EFI_HCRTM_EVENT",
+    "EV_EFI_VARIABLE_AUTHORITY",
+    "EV_EFI_SPDM_FIRMWARE_BLOB",
+    "EV_EFI_SPDM_FIRMWARE_CONFIG",
+  ];
+
+  const DIGEST_ALGS = ["RSA", "TDES", "SHA-1", "SHA-256", "SHA-384", "SHA-512", "SM3"];
+
+  function nf(path, type, suggestions) {
+    const field = { path: path, type: type };
+    if (suggestions) field.suggestions = suggestions;
+    return field;
+  }
+
+  const UEFI_NESTS = [
+    nf("event_type", "string", UEFI_EVENT_TYPES),
+    nf("digest_matches_event", "bool"),
+    nf("digests[_].alg", "string", DIGEST_ALGS),
+    nf("index", "number"),
+    nf("digests[_].digest", "string"),
+    nf("event", "string"),
+    nf("details.string", "string"),
+    nf("details.unicode_name", "string"),
+    nf("details.unicode_name_length", "number"),
+    nf("details.variable_name", "string"),
+    nf("details.variable_data", "string"),
+    nf("details.variable_data_length", "number"),
+    nf("details.data.domain", "string"),
+    nf("details.data.operation", "string"),
+    nf("details.data.content", "string"),
+  ];
+
   const TCB_STATUS = [
     "UpToDate",
     "SWHardeningNeeded",
@@ -49,13 +114,18 @@
     f("td_attributes.key_locker", "bool", "", "TD attributes"),
     f("td_attributes.perfmon", "bool", "", "TD attributes"),
 
-    f("quote.header.version", "hex", "", "Quote header"),
+    f("quote.header.version", "hex", "", "Quote header", {
+      suggestions: ["0400", "0500"],
+      labels: { "0400": "Quote format V4", "0500": "Quote format V5" },
+    }),
     f("quote.header.att_key_type", "hex", "", "Quote header"),
     f("quote.header.tee_type", "hex", "", "Quote header", {
       suggestions: ["81000000"],
+      labels: { "81000000": "TDX" },
     }),
     f("quote.header.vendor_id", "hex", "", "Quote header", {
       suggestions: ["939a7233f79c4ca9940a0db3957f0607"],
+      labels: { "939a7233f79c4ca9940a0db3957f0607": "Intel QE vendor" },
     }),
     f("quote.header.user_data", "hex", "", "Quote header"),
 
@@ -76,12 +146,16 @@
     f("quote.body.rtmr_3", "hex", "", "Quote body"),
     f("quote.body.tee_tcb_svn2", "hex", "", "Quote body"),
     f("quote.body.mr_servicetd", "hex", "", "Quote body"),
-    f("quote.type", "hex", "", "Quote"),
+    f("quote.type", "hex", "", "Quote", {
+      suggestions: ["0200", "0300"],
+      labels: { "0200": "TDX 1.0", "0300": "TDX 1.5" },
+    }),
     f("quote.size", "hex", "", "Quote"),
 
     f("advisory_ids", "list", "", "TCB", { member: "string" }),
     f("collateral_expiration_status", "string", "", "TCB", {
       suggestions: ["0"],
+      labels: { "0": "Not expired" },
     }),
     f("earliest_expiration_date", "string", "", "TCB"),
     f("earliest_issue_date", "string", "", "TCB"),
@@ -107,12 +181,10 @@
     f("advisory_ids_current", "list", "", "Current TCB", {
       member: "string",
     }),
-    f(
-      "uefi_event_logs",
-      "list",
-      "",
-      "Event log",
-    ),
+    f("uefi_event_logs", "list", "", "Event log", {
+      nested: true,
+      nestFields: UEFI_NESTS,
+    }),
   ];
 
   const snpFields = [
@@ -137,6 +209,7 @@
     f("header.att_key_type", "hex", "", "Header"),
     f("header.att_key_data_0", "hex", "", "Header", {
       suggestions: ["00000000"],
+      labels: { "00000000": "SGX" },
     }),
     f("header.qe_svn", "hex", "", "Header"),
     f("header.pce_svn", "hex", "", "Header"),
@@ -204,6 +277,7 @@
   const csvFields = csvPolicy.concat([
     f("version", "string", "", "Version", {
       suggestions: ["1", "2"],
+      labels: { "1": "CSV 1", "2": "CSV 2" },
     }),
     f("user_pubkey_digest", "hex", "", "Identity"),
     f("vm_id", "hex", "", "Identity"),
@@ -405,7 +479,10 @@
       note: "",
       inherit: ["tdx"],
       ownFields: pcrFields("tpm").concat([
-        f("uefi_event_logs", "list", "", "Event log"),
+        f("uefi_event_logs", "list", "", "Event log", {
+          nested: true,
+          nestFields: UEFI_NESTS,
+        }),
       ]),
     },
     {
@@ -416,7 +493,10 @@
       note: "",
       inherit: ["snp"],
       ownFields: pcrFields("tpm").concat([
-        f("uefi_event_logs", "list", "", "Event log"),
+        f("uefi_event_logs", "list", "", "Event log", {
+          nested: true,
+          nestFields: UEFI_NESTS,
+        }),
       ]),
     },
     {
@@ -488,9 +568,14 @@
         f("svn", "string", "", "Sample"),
         f("launch_digest", "string", "", "Sample", {
           suggestions: ["abcde"],
+          labels: { abcde: "Sample digest" },
         }),
-        f("platform_version.major", "number", "", "Sample"),
-        f("platform_version.minor", "number", "", "Sample"),
+        f("platform_version.major", "number", "", "Sample", {
+          suggestions: ["1"],
+        }),
+        f("platform_version.minor", "number", "", "Sample", {
+          suggestions: ["4"],
+        }),
         f("debug", "bool", "", "Sample"),
       ],
     },
@@ -518,18 +603,8 @@
       "",
       "Shared",
     ),
-    f(
-      "init_data_claims",
-      "object",
-      "",
-      "Shared",
-    ),
-    f(
-      "runtime_data_claims",
-      "object",
-      "",
-      "Shared",
-    ),
+    f("init_data_claims", "object", "", "Shared", { nested: true }),
+    f("runtime_data_claims", "object", "", "Shared", { nested: true }),
   ];
 
   const claims = [

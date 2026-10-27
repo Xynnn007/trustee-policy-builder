@@ -3,15 +3,21 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Policy</title>
+  <title>Trustee policy builder</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="glow" aria-hidden="true"></div>
-  <header class="bar">
-    <img class="mark" src="coco-icon.svg" alt="">
-    <img class="wordmark" src="coco-wordmark.svg" alt="Confidential Containers">
-    <span class="product">Policy</span>
+  <header class="site-header">
+    <div class="bar inner">
+      <img class="mark" src="coco-icon.svg" alt="Confidential Containers">
+      <img class="wordmark" src="coco-wordmark.svg" alt="Confidential Containers">
+      <div class="lockup">
+        <span class="product" id="product-label">Trustee</span>
+        <span class="product-sub" id="product-sub">Policy builder</span>
+      </div>
+      <div class="header-actions" id="header-actions"></div>
+    </div>
   </header>
   <main id="app"></main>
   <script src="catalog.js"></script>
